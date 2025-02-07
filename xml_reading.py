@@ -151,7 +151,8 @@ def process_xml(xml_content):
 
             # Buscar el precio dentro de <cac:InvoiceLine>
             item_price = invoice_line.find('.//cbc:LineExtensionAmount', namespaces)
-            item_price = item_price.text if item_price is not None else None
+            item_price = float(item_price.text) * 1.18 if item_price is not None else None
+            item_price = round(item_price, 2) if item_price is not None else None
 
             # Crear el objeto Item y agregarlo a la lista
             item_obj = Item(item_name, item_quantity, item_price)
