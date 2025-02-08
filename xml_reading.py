@@ -1,6 +1,7 @@
 import time
 import xml.etree.ElementTree as ET
 import json
+import requests  # Importa requests para realizar llamadas HTTP
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
@@ -8,6 +9,10 @@ from watchdog.events import FileSystemEventHandler
 folder_paths = [
     r"C:\Users\USER\Documents\TESTEOXML"
 ]
+
+# Endpoints de tus APIs
+ENDPOINT_CREATE_CLIENT = "http://127.0.0.1:5000/api/clientes/automatic-create"
+ENDPOINT_CREATE_INPROCESS = "http://127.0.0.1:5000/api/regmovcab/create-inprocess"
 
 
 # Definición de clases para representar los datos del XML
@@ -68,6 +73,7 @@ class OperationInformation:
             "TypeOperation": self.type_operation
         }
 
+
 class NoteSalesInformation:
     def __init__(self, note_id, issue_date):
         self.note_id = note_id
@@ -78,7 +84,6 @@ class NoteSalesInformation:
             "NoteID": self.note_id,
             "IssueDate": self.issue_date
         }
-
 
 
 # Función para procesar el archivo XML y convertirlo a JSON
@@ -103,9 +108,12 @@ def process_xml(xml_content):
         )
 
         # Extraer información de "PartyClient"
-        client_address_type_code = root.find('.//cac:AccountingCustomerParty/cac:Party/cac:PartyIdentification/cbc:ID', namespaces)
-        client_registration_name = root.find('.//cac:AccountingCustomerParty/cac:Party/cac:PartyLegalEntity/cbc:RegistrationName', namespaces)
-        client_identify_code = root.find('.//cac:AccountingCustomerParty/cac:Party/cac:PartyIdentification/cbc:ID', namespaces)
+        client_address_type_code = root.find('.//cac:AccountingCustomerParty/cac:Party/cac:PartyIdentification/cbc:ID',
+                                             namespaces)
+        client_registration_name = root.find(
+            './/cac:AccountingCustomerParty/cac:Party/cac:PartyLegalEntity/cbc:RegistrationName', namespaces)
+        client_identify_code = root.find('.//cac:AccountingCustomerParty/cac:Party/cac:PartyIdentification/cbc:ID',
+                                         namespaces)
 
         party_client = PartyClient(
             client_address_type_code.text if client_address_type_code is not None else None,
@@ -126,6 +134,7 @@ def process_xml(xml_content):
             type_operation.text if type_operation is not None else None
         )
 
+        # Extraer información de "NoteSalesInformation"
         note_sales_info = root.find('.//cbc:ID', namespaces)
         issue_date = root.find('.//cbc:IssueDate', namespaces)
 
@@ -136,10 +145,7 @@ def process_xml(xml_content):
 
         # Extraer "ItemList"
         item_list = []
-
-        # Buscar todos los elementos <cac:InvoiceLine> para obtener el precio y la cantidad
         invoice_lines = root.findall('.//cac:InvoiceLine', namespaces)
-
         for invoice_line in invoice_lines:
             # Buscar la descripción del artículo en <cac:Item>
             item_name = invoice_line.find('.//cac:Item/cbc:Description', namespaces)
@@ -154,19 +160,15 @@ def process_xml(xml_content):
             item_price = float(item_price.text) * 1.18 if item_price is not None else None
             item_price = round(item_price, 2) if item_price is not None else None
 
-            # Crear el objeto Item y agregarlo a la lista
             item_obj = Item(item_name, item_quantity, item_price)
             item_list.append(item_obj.to_dict())
 
-        # El resultado será una lista de diccionarios con los datos de los artículos
-
-        # Crear el resultado final
         result = {
             "MyInformation": my_info.to_dict(),
             "PartyClient": party_client.to_dict(),
             "OperationInformation": operation_info.to_dict(),
             "ItemList": item_list,
-            "NoteSalesInformation": note_sales_info_obj.to_dict(),
+            "NoteSalesInformation": note_sales_info_obj.to_dict()
         }
 
         return json.dumps(result, indent=4, ensure_ascii=False)
@@ -185,10 +187,53 @@ class XMLHandler(FileSystemEventHandler):
             print(f"Nuevo archivo XML detectado: {event.src_path}")
             with open(event.src_path, 'r', encoding='utf-8') as file:
                 content = file.read()
-                json_content = process_xml(content)
-                if json_content:
+                json_str = process_xml(content)
+                if json_str:
+                    # Convertir el string JSON a dict para manipularlo
+                    json_data = json.loads(json_str)
                     print("Contenido en formato JSON:")
-                    print(json_content)
+                    print(json.dumps(json_data, indent=4, ensure_ascii=False))
+
+                    # Payload para el endpoint '/automatic-create'
+                    payload_automatic = {
+                        "PartyClient": json_data.get("PartyClient")
+                    }
+                    print("Payload para /automatic-create:")
+                    print(json.dumps(payload_automatic, indent=4, ensure_ascii=False))
+                    response_cliente = requests.post(ENDPOINT_CREATE_CLIENT, json=payload_automatic)
+                    print(f"Respuesta de /automatic-create: {response_cliente.json()}")
+
+                    # Procesar NoteSalesInformation para obtener tip_docum
+                    note_sales = json_data.get("NoteSalesInformation", {})
+                    note_id = note_sales.get("NoteID", "")
+                    if note_id.startswith("F001"):
+                        tip_docum = "01"
+                    elif note_id.startswith("B001"):
+                        tip_docum = "02"
+                    else:
+                        tip_docum = "00"
+
+                    # Payload para el endpoint '/regmovcab/create-inprocess'
+                    op_info = json_data.get("OperationInformation", {})
+                    payload_regmovcab = {
+                        "tip_mov": 1,  # Valor de ejemplo (convertido a num en el endpoint)
+                        "tip_vta": "01",  # Valor fijo
+                        "tip_docum": tip_docum,  # Calculado a partir de NoteSalesInformation.NoteID
+                        "num_docum": note_id,  # NoteID
+                        "ruc_cliente": json_data.get("PartyClient", {}).get("IdentifyCode"),
+                        "vendedor": None,  # Por defecto NULL
+                        "vvta": float(op_info.get("Amount", 0)),
+                        "igv": float(op_info.get("IGV", 0)),
+                        "total": float(op_info.get("TotalAmount", 0)),
+                        "idemp": "01",  # Valor fijo
+                        "estado": 2,  # Valor fijo
+                        "ItemList": json_data.get("ItemList", [])
+                    }
+
+                    print("Payload para /regmovcab/create-inprocess:")
+                    print(json.dumps(payload_regmovcab, indent=4, ensure_ascii=False))
+                    response_regmovcab = requests.post(ENDPOINT_CREATE_INPROCESS, json=payload_regmovcab)
+                    print(f"Respuesta de /regmovcab/create-inprocess: {response_regmovcab.json()}")
 
 
 # Función principal para monitorear la carpeta
