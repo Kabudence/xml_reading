@@ -4,6 +4,8 @@ import json
 import requests  # Importa requests para realizar llamadas HTTP
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+import jwt
+from datetime import datetime, timezone, timedelta
 
 # Rutas a las carpetas que quieres monitorear
 folder_paths = [
@@ -108,12 +110,9 @@ def process_xml(xml_content):
         )
 
         # Extraer información de "PartyClient"
-        client_address_type_code = root.find('.//cac:AccountingCustomerParty/cac:Party/cac:PartyIdentification/cbc:ID',
-                                             namespaces)
-        client_registration_name = root.find(
-            './/cac:AccountingCustomerParty/cac:Party/cac:PartyLegalEntity/cbc:RegistrationName', namespaces)
-        client_identify_code = root.find('.//cac:AccountingCustomerParty/cac:Party/cac:PartyIdentification/cbc:ID',
-                                         namespaces)
+        client_address_type_code = root.find('.//cac:AccountingCustomerParty/cac:Party/cac:PartyIdentification/cbc:ID', namespaces)
+        client_registration_name = root.find('.//cac:AccountingCustomerParty/cac:Party/cac:PartyLegalEntity/cbc:RegistrationName', namespaces)
+        client_identify_code = root.find('.//cac:AccountingCustomerParty/cac:Party/cac:PartyIdentification/cbc:ID', namespaces)
 
         party_client = PartyClient(
             client_address_type_code.text if client_address_type_code is not None else None,
@@ -136,6 +135,11 @@ def process_xml(xml_content):
 
         # Extraer información de "NoteSalesInformation"
         note_sales_info = root.find('.//cbc:ID', namespaces)
+        # Si el valor del cbc:ID comienza con "RC", no se procesa el documento
+        if note_sales_info is not None and note_sales_info.text.startswith("RC"):
+            print("Documento RC detectado, no se procesará.")
+            return None
+
         issue_date = root.find('.//cbc:IssueDate', namespaces)
 
         note_sales_info_obj = NoteSalesInformation(
@@ -178,21 +182,23 @@ def process_xml(xml_content):
         return None
 
 
-# Clase para manejar eventos de archivos
 class XMLHandler(FileSystemEventHandler):
     def on_created(self, event):
         if event.is_directory:
             return
         if event.src_path.endswith('.xml'):
             print(f"Nuevo archivo XML detectado: {event.src_path}")
-            with open(event.src_path, 'r', encoding='utf-8') as file:
+            with open(event.src_path, 'r', encoding='utf-8', errors='replace') as file:
                 content = file.read()
                 json_str = process_xml(content)
                 if json_str:
-                    # Convertir el string JSON a dict para manipularlo
                     json_data = json.loads(json_str)
                     print("Contenido en formato JSON:")
                     print(json.dumps(json_data, indent=4, ensure_ascii=False))
+
+                    # Generar token JWT
+                    token = create_jwt_token()
+                    headers = {'Authorization': f'Bearer {token}'}
 
                     # Payload para el endpoint '/automatic-create'
                     payload_automatic = {
@@ -200,7 +206,7 @@ class XMLHandler(FileSystemEventHandler):
                     }
                     print("Payload para /automatic-create:")
                     print(json.dumps(payload_automatic, indent=4, ensure_ascii=False))
-                    response_cliente = requests.post(ENDPOINT_CREATE_CLIENT, json=payload_automatic)
+                    response_cliente = requests.post(ENDPOINT_CREATE_CLIENT, json=payload_automatic, headers=headers)
                     print(f"Respuesta de /automatic-create: {response_cliente.json()}")
 
                     # Procesar NoteSalesInformation para obtener tip_docum
@@ -213,6 +219,24 @@ class XMLHandler(FileSystemEventHandler):
                     else:
                         tip_docum = "00"
 
+                    # Calcular 'idemp' en función del IdentifyCode y, si corresponde, de los primeros 4 dígitos de NoteID
+                    identify_code = json_data.get("PartyClient", {}).get("IdentifyCode", "")
+                    if identify_code == "10412942987":
+                        idemp = "01"
+                    elif identify_code == "10179018913":
+                        idemp = "04"
+                    elif identify_code == "20481678880":
+                        if note_id.startswith("B001") or note_id.startswith("F001"):
+                            idemp = "02"
+                        elif note_id.startswith("B002") or note_id.startswith("F002"):
+                            idemp = "03"
+                        elif note_id.startswith("B003") or note_id.startswith("F003"):
+                            idemp = "05"
+                        else:
+                            idemp = "01"  # Valor por defecto si no coincide
+                    else:
+                        idemp = "01"  # Valor por defecto
+
                     # Payload para el endpoint '/regmovcab/create-inprocess'
                     op_info = json_data.get("OperationInformation", {})
                     payload_regmovcab = {
@@ -220,19 +244,19 @@ class XMLHandler(FileSystemEventHandler):
                         "tip_vta": "01",  # Valor fijo
                         "tip_docum": tip_docum,  # Calculado a partir de NoteSalesInformation.NoteID
                         "num_docum": note_id,  # NoteID
-                        "ruc_cliente": json_data.get("PartyClient", {}).get("IdentifyCode"),
+                        "ruc_cliente": identify_code,
                         "vendedor": None,  # Por defecto NULL
                         "vvta": float(op_info.get("Amount", 0)),
                         "igv": float(op_info.get("IGV", 0)),
                         "total": float(op_info.get("TotalAmount", 0)),
-                        "idemp": "01",  # Valor fijo
+                        "idemp": idemp,
                         "estado": 2,  # Valor fijo
                         "ItemList": json_data.get("ItemList", [])
                     }
 
                     print("Payload para /regmovcab/create-inprocess:")
                     print(json.dumps(payload_regmovcab, indent=4, ensure_ascii=False))
-                    response_regmovcab = requests.post(ENDPOINT_CREATE_INPROCESS, json=payload_regmovcab)
+                    response_regmovcab = requests.post(ENDPOINT_CREATE_INPROCESS, json=payload_regmovcab, headers=headers)
                     print(f"Respuesta de /regmovcab/create-inprocess: {response_regmovcab.json()}")
 
 
@@ -255,6 +279,17 @@ def start_monitoring():
 
     observer.join()
 
+
+def create_jwt_token():
+    secret_key = "a25fc7905471e60a094749de707ab956871d5ba26df167a03863911a70c54950"  # Debe coincidir con tu configuración en la API
+    now = datetime.now(timezone.utc)  # Obtenemos la hora actual con zona horaria UTC
+    payload = {
+        "exp": now + timedelta(minutes=60),
+        "iat": now,
+        "sub": "xml_monitor"  # Identificador para este cliente (opcional)
+    }
+    token = jwt.encode(payload, secret_key, algorithm="HS256")
+    return token
 
 if __name__ == "__main__":
     start_monitoring()
