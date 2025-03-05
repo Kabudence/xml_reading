@@ -10,16 +10,16 @@ import jwt
 from datetime import datetime, timezone, timedelta
 
 # Rutas a las carpetas que quieres monitorear
-folder_paths = [
-    r"C:\Users\USER\Documents\TESTEOXML"
-
-]
 # folder_paths = [
-#     r"D:\SainfoNet_FE_Rafael\XMLData",
-#     r"D:\SainfoNet_FE_katherine\XMLData",
-#     r"D:\SainfoNet_FE_hidalgo\XMLData"
+#     r"C:\Users\USER\Documents\TESTEOXML"
 #
 # ]
+folder_paths = [
+    r"D:\SainfoNet_FE_Rafael\XMLData",
+    r"D:\SainfoNet_FE_katherine\XMLData",
+    r"D:\SainfoNet_FE_hidalgo\XMLData"
+
+]
 
 # Endpoints de tus APIs
 ENDPOINT_CREATE_CLIENT = "https://salesmanagerproject-production.up.railway.app/api/clientes/automatic-create"
