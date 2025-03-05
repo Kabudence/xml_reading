@@ -1,6 +1,8 @@
 import time
 import xml.etree.ElementTree as ET
 import json
+
+import pytz
 import requests  # Importa requests para realizar llamadas HTTP
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
@@ -9,15 +11,20 @@ from datetime import datetime, timezone, timedelta
 
 # Rutas a las carpetas que quieres monitorear
 folder_paths = [
-    r"D:\SainfoNet_FE_Rafael\XMLData",
-    r"D:\SainfoNet_FE_katherine\XMLData",
-    r"D:\SainfoNet_FE_hidalgo\XMLData"
+    r"C:\Users\USER\Documents\TESTEOXML"
 
 ]
+# folder_paths = [
+#     r"D:\SainfoNet_FE_Rafael\XMLData",
+#     r"D:\SainfoNet_FE_katherine\XMLData",
+#     r"D:\SainfoNet_FE_hidalgo\XMLData"
+#
+# ]
 
 # Endpoints de tus APIs
-ENDPOINT_CREATE_CLIENT = "https://web-production-927a.up.railway.app/api/clientes/automatic-create"
-ENDPOINT_CREATE_INPROCESS = "https://web-production-927a.up.railway.app/api/regmovcab/create-inprocess"
+ENDPOINT_CREATE_CLIENT = "https://salesmanagerproject-production.up.railway.app/api/clientes/automatic-create"
+ENDPOINT_CREATE_INPROCESS = "https://salesmanagerproject-production.up.railway.app/api/regmovcab/create-inprocess"
+ENDPOINT_CANCEL="https://salesmanagerproject-production.up.railway.app/api/regmovcab/cancel-sale/"
 
 
 # Definición de clases para representar los datos del XML
@@ -96,6 +103,8 @@ def process_xml(xml_content):
     namespaces = {
         'cbc': 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2',
         'cac': 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2',
+        'sac': 'urn:sunat:names:specification:ubl:peru:schema:xsd:SunatAggregateComponents-1'
+
     }
 
     try:
@@ -138,10 +147,40 @@ def process_xml(xml_content):
 
         # Extraer información de "NoteSalesInformation"
         note_sales_info = root.find('.//cbc:ID', namespaces)
-        # Si el valor del cbc:ID comienza con "RC", no se procesa el documento
+        # Si es un Resumen de Bajas (RC)
         if note_sales_info is not None and note_sales_info.text.startswith("RC"):
-            print("Documento RC detectado, no se procesará.")
+            token = create_jwt_token()
+            headers = {'Authorization': f'Bearer {token}'}
+
+            # Buscar TODAS las líneas de resumen
+            summary_lines = root.findall('.//sac:SummaryDocumentsLine', namespaces)
+
+            for line in summary_lines:
+                num_docum_element = line.find('.//cbc:ID', namespaces)
+                if num_docum_element is not None:
+                    num_docum = num_docum_element.text.strip()  # Elimina espacios antes/después
+                    print("num_docum encontrado:", num_docum)
+
+                    cancel_url = f"{ENDPOINT_CANCEL}{num_docum}"
+                    response = requests.put(cancel_url, headers=headers)
+                    print(f"Cancelando RC - {num_docum}: {response.status_code} - {response.text}")
+
             return None
+
+        # Si es una Anulación (RA)
+        if note_sales_info is not None and note_sales_info.text.startswith("RA"):
+            serial = root.find('.//sac:DocumentSerialID', namespaces)
+            number = root.find('.//sac:DocumentNumberID', namespaces)
+            if serial is not None and number is not None:
+                num_docum = f"{serial.text}-{number.text}"
+                print("num_docum encontrado:", num_docum)
+                token = create_jwt_token()  # Generar token JWT
+                headers = {'Authorization': f'Bearer {token}'}
+                cancel_url = f"{ENDPOINT_CANCEL}{num_docum}"
+                response = requests.put(cancel_url, headers=headers)
+                print(f"Cancelando documento RA {num_docum}: {response.status_code} - {response.text}")
+            return None  # No procesar como venta normal
+
 
         issue_date = root.find('.//cbc:IssueDate', namespaces)
 
@@ -162,10 +201,21 @@ def process_xml(xml_content):
             item_quantity = invoice_line.find('.//cbc:InvoicedQuantity', namespaces)
             item_quantity = item_quantity.text if item_quantity is not None else None
 
-            # Buscar el precio dentro de <cac:InvoiceLine>
-            item_price = invoice_line.find('.//cbc:LineExtensionAmount', namespaces)
-            item_price = float(item_price.text) * 1.18 if item_price is not None else None
-            item_price = round(item_price, 2) if item_price is not None else None
+            # Buscar el precio base (sin IGV) y aplicar ajustes
+            item_price_element = invoice_line.find('.//cbc:LineExtensionAmount', namespaces)
+            if item_price_element is not None:
+                # Paso 1: Obtener el precio base del XML
+                precio_base = float(item_price_element.text)
+
+                # Paso 2: Si el nombre termina en '*', quitar el 5%
+                if item_name and item_name.endswith('*'):
+                    precio_base = precio_base / 1.05  # 🔄 Quitar el 5% adicional
+                    item_name = item_name.rstrip('*')  # 🧹 Eliminar el asterisco
+
+                # Paso 3: Calcular el precio con IGV (18%)
+                item_price = round(precio_base * 1.18, 2)  # 💡 Precio final con IGV
+            else:
+                item_price = None
 
             item_obj = Item(item_name, item_quantity, item_price)
             item_list.append(item_obj.to_dict())
@@ -285,7 +335,8 @@ def start_monitoring():
 
 def create_jwt_token():
     secret_key = "a25fc7905471e60a094749de707ab956871d5ba26df167a03863911a70c54950"  # Debe coincidir con tu configuración en la API
-    now = datetime.now(timezone.utc)  # Obtenemos la hora actual con zona horaria UTC
+    peru_tz = pytz.timezone('America/Lima')  # Zona horaria de Perú
+    now = datetime.now(peru_tz)  # Hora actual en Perú
     payload = {
         "exp": now + timedelta(minutes=60),
         "iat": now,

@@ -1,6 +1,8 @@
 import time
 import xml.etree.ElementTree as ET
 import json
+
+import pytz
 import requests  # Importa requests para realizar llamadas HTTP
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
@@ -282,7 +284,8 @@ def start_monitoring():
 
 def create_jwt_token():
     secret_key = "a25fc7905471e60a094749de707ab956871d5ba26df167a03863911a70c54950"  # Debe coincidir con tu configuración en la API
-    now = datetime.now(timezone.utc)  # Obtenemos la hora actual con zona horaria UTC
+    peru_tz = pytz.timezone('America/Lima')  # Zona horaria de Perú
+    now = datetime.now(peru_tz)  # Hora actual en Perú
     payload = {
         "exp": now + timedelta(minutes=60),
         "iat": now,
