@@ -10,16 +10,16 @@ import jwt
 from datetime import datetime, timezone, timedelta
 
 # Rutas a las carpetas que quieres monitorear
-# folder_paths = [
-#     r"C:\Users\USER\Documents\TESTEOXML"
-#
-# ]
 folder_paths = [
-    r"D:\SainfoNet_FE_Rafael\XMLData",
-    r"D:\SainfoNet_FE_katherine\XMLData",
-    r"D:\SainfoNet_FE_hidalgo\XMLData"
+    r"C:\Users\USER\Documents\TESTEOXML"
 
 ]
+# folder_paths = [
+#     r"D:\SainfoNet_FE_Rafael\XMLData",
+#     r"D:\SainfoNet_FE_katherine\XMLData",
+#     r"D:\SainfoNet_FE_hidalgo\XMLData"
+#
+# ]
 
 # Endpoints de tus APIs
 ENDPOINT_CREATE_CLIENT = "https://salesmanagerproject-production.up.railway.app/api/clientes/automatic-create"
@@ -265,6 +265,7 @@ class XMLHandler(FileSystemEventHandler):
                     # Procesar NoteSalesInformation para obtener tip_docum
                     note_sales = json_data.get("NoteSalesInformation", {})
                     note_id = note_sales.get("NoteID", "")
+                    print("NOTE ID =",note_id)
                     if note_id.startswith("F001"):
                         tip_docum = "01"
                     elif note_id.startswith("B001"):
@@ -273,7 +274,8 @@ class XMLHandler(FileSystemEventHandler):
                         tip_docum = "00"
 
                     # Calcular 'idemp' en función del IdentifyCode y, si corresponde, de los primeros 4 dígitos de NoteID
-                    identify_code = json_data.get("PartyClient", {}).get("IdentifyCode", "")
+                    identify_code = json_data.get("MyInformation", {}).get("IdentifyCode", "")
+                    print("codigo de identificacion:",identify_code)
                     if identify_code == "10412942987":
                         idemp = "01"
                     elif identify_code == "10179018913":
@@ -290,6 +292,7 @@ class XMLHandler(FileSystemEventHandler):
                     else:
                         idemp = "06"
 
+                    print("EL IDEMP ES: ",idemp)
                     # Payload para el endpoint '/regmovcab/create-inprocess'
                     op_info = json_data.get("OperationInformation", {})
                     payload_regmovcab = {
