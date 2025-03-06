@@ -291,6 +291,7 @@ class XMLHandler(FileSystemEventHandler):
                             idemp = "01"  # Valor por defecto si no coincide
                     else:
                         idemp = "06"
+                    identify_code_client = json_data.get("PartyClient", {}).get("IdentifyCode", "")
 
                     print("EL IDEMP ES: ",idemp)
                     # Payload para el endpoint '/regmovcab/create-inprocess'
@@ -300,7 +301,7 @@ class XMLHandler(FileSystemEventHandler):
                         "tip_vta": "01",  # Valor fijo
                         "tip_docum": tip_docum,  # Calculado a partir de NoteSalesInformation.NoteID
                         "num_docum": note_id,  # NoteID
-                        "ruc_cliente": identify_code,
+                        "ruc_cliente": identify_code_client,
                         "vendedor": None,  # Por defecto NULL
                         "vvta": float(op_info.get("Amount", 0)),
                         "igv": float(op_info.get("IGV", 0)),
